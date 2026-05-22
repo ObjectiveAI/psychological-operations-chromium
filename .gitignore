@@ -11,3 +11,7 @@ __pycache__/
 
 # Ignore optional build / cache directory
 /build
+
+# build.sh per-target work + final .zip (intermediate cache; final
+# artifacts live on GitHub Releases, not in the repo)
+/.build

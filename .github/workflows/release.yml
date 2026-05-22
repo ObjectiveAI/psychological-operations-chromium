@@ -1,0 +1,73 @@
+name: release
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      should-release: ${{ steps.check.outputs.should-release }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(tr -d '[:space:]' < VERSION)
+          if [ -z "$VERSION" ]; then
+            echo "ERROR: VERSION file is empty" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Release version: $VERSION"
+          if gh release view "v$VERSION" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "should-release=false" >> "$GITHUB_OUTPUT"
+            echo "Release v$VERSION already exists — skipping."
+          else
+            echo "should-release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  create-release:
+    needs: check-version
+    if: needs.check-version.outputs.should-release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ needs.check-version.outputs.version }}"
+          # Created without --draft so per-asset uploads from the build
+          # matrix become visible the moment each leg finishes — mirrors
+          # the pattern in psychological-operations/.github/workflows/release.yml.
+          gh release create "v$VERSION" \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "v$VERSION" \
+            --notes "ungoogled-chromium build of v$VERSION"
+
+  build:
+    needs: [check-version, create-release]
+    if: needs.check-version.outputs.should-release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04,   platform: linux-x86_64   }
+          - { os: macos-13,       platform: macos-x86_64   }
+          - { os: macos-14,       platform: macos-aarch64  }
+          - { os: windows-latest, platform: windows-x86_64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash build.sh --target ${{ matrix.platform }} --release
