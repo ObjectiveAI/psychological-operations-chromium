@@ -98,7 +98,7 @@
  #include "components/sampling_profiler/thread_profiler.h"
  #include "components/startup_metric_utils/common/startup_metric_utils.h"
  #include "components/variations/service/variations_network_clock.h"
-@@ -1057,6 +1058,43 @@ std::optional<int> ChromeMainDelegate::BasicStartupComplete() {
+@@ -1057,6 +1058,62 @@ std::optional<int> ChromeMainDelegate::BasicStartupComplete() {
    const base::CommandLine& command_line =
        *base::CommandLine::ForCurrentProcess();
 
@@ -137,6 +137,25 @@
 +    }
 +    base::CommandLine::ForCurrentProcess()->AppendSwitchPath(
 +        switches::kUserDataDir, target_dir);
++
++    // Three Chromium dirs deliberately ignore --user-data-dir (they're
++    // computed from GetDefaultUserDataDirectory() because they're
++    // initialized before command-line parsing). Override them via
++    // PathService so every byte of state stays under target_dir.
++    base::PathService::OverrideAndCreateIfNeeded(
++        chrome::DIR_CRASH_DUMPS,
++        target_dir.Append(FILE_PATH_LITERAL("Crashpad")),
++        /*is_absolute=*/false, /*create=*/true);
++#if BUILDFLAG(IS_WIN)
++    base::PathService::OverrideAndCreateIfNeeded(
++        chrome::DIR_WATCHER_DATA,
++        target_dir.Append(FILE_PATH_LITERAL("Diagnostics")),
++        /*is_absolute=*/false, /*create=*/true);
++    base::PathService::OverrideAndCreateIfNeeded(
++        chrome::DIR_ROAMING_USER_DATA,
++        target_dir.Append(FILE_PATH_LITERAL("Roaming")),
++        /*is_absolute=*/false, /*create=*/true);
++#endif
 +  }
 +
    // Only allow disabling web security via the command-line flag if the user has
