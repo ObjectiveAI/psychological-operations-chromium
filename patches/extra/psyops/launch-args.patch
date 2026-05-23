@@ -1,0 +1,124 @@
+# Add psychological-operations launch-arg switches.
+#
+# Declares three command-line switches in components/psyops/:
+#   --psyop=<name>        names the psyop bound to this session
+#   --x-app               flags this as the master X-app (root) session
+#   --config-base-dir=<p> base directory for state (required)
+#
+# Adds early-startup validation in ChromeMainDelegate::BasicStartupComplete()
+# that fails the browser process if --config-base-dir is missing or if
+# neither --psyop nor --x-app is provided. Subprocesses are exempt (they
+# inherit their parent's command line; the gate is a one-shot at the
+# browser-process startup boundary).
+#
+# This patch only registers and validates the switches; it does not yet
+# wire them into any session behavior.
+
+--- /dev/null
++++ b/components/psyops/BUILD.gn
+@@ -0,0 +1,14 @@
++# Copyright 2026 The ObjectiveAI Authors. All rights reserved.
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++component("psyops_switches") {
++  sources = [
++    "psyops_switches.h",
++    "psyops_switches.cc",
++  ]
++
++  defines = [ "IS_PSYOPS_IMPL" ]
++
++  deps = [ "//base" ]
++}
+--- /dev/null
++++ b/components/psyops/psyops_switches.cc
+@@ -0,0 +1,21 @@
++// Copyright 2026 The ObjectiveAI Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "components/psyops/psyops_switches.h"
++
++namespace switches {
++
++// Names the psyop this Chromium session is bound to. String value.
++// Ignored when --x-app is also present (--x-app takes precedence).
++const char kPsyop[] = "psyop";
++
++// Marks this Chromium session as the master X-app (root account) session.
++// Boolean flag.
++const char kXApp[] = "x-app";
++
++// Base directory holding all psychological-operations state for this host
++// (matches `cfg.base_dir()` on the launcher side). Required at launch.
++const char kConfigBaseDir[] = "config-base-dir";
++
++}  // namespace switches
+--- /dev/null
++++ b/components/psyops/psyops_switches.h
+@@ -0,0 +1,20 @@
++// Copyright 2026 The ObjectiveAI Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// Defines all the psychological-operations-specific command-line switches.
++
++#ifndef COMPONENTS_PSYOPS_PSYOPS_SWITCHES_H_
++#define COMPONENTS_PSYOPS_PSYOPS_SWITCHES_H_
++
++#include "base/component_export.h"
++
++namespace switches {
++
++COMPONENT_EXPORT(PSYOPS) extern const char kPsyop[];
++COMPONENT_EXPORT(PSYOPS) extern const char kXApp[];
++COMPONENT_EXPORT(PSYOPS) extern const char kConfigBaseDir[];
++
++}  // namespace switches
++
++#endif  // COMPONENTS_PSYOPS_PSYOPS_SWITCHES_H_
+--- a/chrome/BUILD.gn
++++ b/chrome/BUILD.gn
+@@ -1428,6 +1428,7 @@ group("dependencies") {
+     "//components/crash/core/app",
+     "//components/devtools/devtools_pipe",
+     "//components/memory_system",
++    "//components/psyops:psyops_switches",
+     "//components/startup_metric_utils",
+     "//components/sync",
+     "//components/upload_list",
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -76,6 +76,7 @@
+ #include "components/memory_system/initializer.h"
+ #include "components/memory_system/parameters.h"
+ #include "components/metrics/persistent_histograms.h"
++#include "components/psyops/psyops_switches.h"
+ #include "components/sampling_profiler/thread_profiler.h"
+ #include "components/startup_metric_utils/common/startup_metric_utils.h"
+ #include "components/variations/service/variations_network_clock.h"
+@@ -1057,6 +1058,23 @@ std::optional<int> ChromeMainDelegate::BasicStartupComplete() {
+   const base::CommandLine& command_line =
+       *base::CommandLine::ForCurrentProcess();
+
++  // psyops launch arg validation: the browser process must be invoked with
++  // --config-base-dir AND at least one of --psyop / --x-app. Subprocesses
++  // inherit the command line, so this is a one-shot gate at the
++  // browser-process startup boundary.
++  if (!command_line.HasSwitch(switches::kProcessType)) {
++    if (!command_line.HasSwitch(switches::kConfigBaseDir)) {
++      LOG(ERROR) << "--" << switches::kConfigBaseDir << " is required";
++      return 1;
++    }
++    if (!command_line.HasSwitch(switches::kPsyop) &&
++        !command_line.HasSwitch(switches::kXApp)) {
++      LOG(ERROR) << "one of --" << switches::kPsyop
++                 << " or --" << switches::kXApp << " must be specified";
++      return 1;
++    }
++  }
++
+   // Only allow disabling web security via the command-line flag if the user has
+   // specified a distinct profile directory. This still enables tests to disable
+   // web security by setting the kWebKitWebSecurityEnabled pref directly.

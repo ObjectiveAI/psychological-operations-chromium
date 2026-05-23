@@ -1,0 +1,15 @@
+# Force LF line endings on text files that downstream tooling (patch,
+# quilt, bash) refuses to parse with CRLF. Without this, Git's
+# autocrlf on Windows can convert .patch / .sh files at checkout,
+# breaking patch application on Linux/macOS CI runners.
+
+*.patch text eol=lf
+*.sh    text eol=lf
+*.gn    text eol=lf
+*.gni   text eol=lf
+*.py    text eol=lf
+series  text eol=lf
+VERSION text eol=lf
+
+# Workflows are YAML; same idea.
+.github/**/*.yml text eol=lf
