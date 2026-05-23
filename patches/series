@@ -113,3 +113,4 @@ extra/psyops/launch-args.patch
 extra/psyops/no-session-restore.patch
 extra/psyops/no-default-prompts.patch
 extra/psyops/hand-pointer-resource.patch
+extra/psyops/stdin-io.patch

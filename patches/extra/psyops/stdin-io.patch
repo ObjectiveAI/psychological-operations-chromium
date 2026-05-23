@@ -1,0 +1,211 @@
+# Add a JSON-Lines stdin/stdout dev API to the chromium browser process.
+#
+# A dedicated background thread reads one JSON object per line from
+# stdin, parses it, and dispatches to UI-thread handlers. Each handler
+# writes a JSON response line to stdout under a mutex (so concurrent
+# in-flight requests don't interleave).
+#
+# Initial dispatch table:
+#   {"type":"html"} -> {"type":"html","html":"..."} or
+#                     {"type":"html","error":"..."}
+#
+# The reader thread starts from ChromeMainDelegate::BasicStartupComplete
+# inside the existing browser-process guard (added by launch-args.patch).
+# Unknown request types are dropped with VLOG(1).
+
+--- /dev/null
++++ b/components/psyops/stdin_io.h
+@@ -0,0 +1,20 @@
++// Copyright 2026 The ObjectiveAI Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef COMPONENTS_PSYOPS_STDIN_IO_H_
++#define COMPONENTS_PSYOPS_STDIN_IO_H_
++
++namespace psyops {
++
++// Starts a background thread that reads JSON-Lines requests from stdin
++// and dispatches them to UI-thread handlers. Responses are JSONL on
++// stdout. Idempotent: safe to call once early in browser-process startup.
++//
++// Currently supported request types:
++//   {"type":"html"} -> {"type":"html","html":"..."}
++//                  or {"type":"html","error":"..."}
++void StartStdinIo();
++
++}  // namespace psyops
++
++#endif  // COMPONENTS_PSYOPS_STDIN_IO_H_
+--- /dev/null
++++ b/components/psyops/stdin_io.cc
+@@ -0,0 +1,129 @@
++// Copyright 2026 The ObjectiveAI Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "components/psyops/stdin_io.h"
++
++#include <iostream>
++#include <optional>
++#include <string>
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "base/json/json_reader.h"
++#include "base/json/json_writer.h"
++#include "base/location.h"
++#include "base/logging.h"
++#include "base/no_destructor.h"
++#include "base/synchronization/lock.h"
++#include "base/task/single_thread_task_runner.h"
++#include "base/threading/thread.h"
++#include "base/values.h"
++#include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/browser_finder.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "content/public/browser/browser_thread.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/web_contents.h"
++
++namespace psyops {
++
++namespace {
++
++// Arbitrary isolated-world ID for our JS evaluation; outside the ranges
++// chromium and extensions normally use.
++constexpr int kIsolatedWorldId = 1066;
++
++void WriteResponse(base::Value::Dict response) {
++  std::string out;
++  base::JSONWriter::Write(base::Value(std::move(response)), &out);
++  static base::NoDestructor<base::Lock> lock;
++  base::AutoLock guard(*lock);
++  std::cout << out << "\n";
++  std::cout.flush();
++}
++
++void OnHtmlResult(base::Value result) {
++  base::Value::Dict response;
++  response.Set("type", "html");
++  if (result.is_string()) {
++    response.Set("html", result.GetString());
++  } else {
++    response.Set("error", "js execution returned non-string");
++  }
++  WriteResponse(std::move(response));
++}
++
++void HandleHtmlRequest() {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  Browser* browser = chrome::FindBrowserWithActiveWindow();
++  if (!browser) {
++    base::Value::Dict response;
++    response.Set("type", "html");
++    response.Set("error", "no active browser");
++    WriteResponse(std::move(response));
++    return;
++  }
++  content::WebContents* wc =
++      browser->tab_strip_model()->GetActiveWebContents();
++  if (!wc) {
++    base::Value::Dict response;
++    response.Set("type", "html");
++    response.Set("error", "no active web contents");
++    WriteResponse(std::move(response));
++    return;
++  }
++  content::RenderFrameHost* rfh = wc->GetPrimaryMainFrame();
++  if (!rfh) {
++    base::Value::Dict response;
++    response.Set("type", "html");
++    response.Set("error", "no main frame");
++    WriteResponse(std::move(response));
++    return;
++  }
++  rfh->ExecuteJavaScriptInIsolatedWorld(
++      u"document.documentElement.outerHTML",
++      base::BindOnce(&OnHtmlResult), kIsolatedWorldId);
++}
++
++void HandleParsedRequest(base::Value::Dict request) {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  const std::string* type = request.FindString("type");
++  if (!type) {
++    VLOG(1) << "psyops stdin: dropping request without 'type'";
++    return;
++  }
++  if (*type == "html") {
++    HandleHtmlRequest();
++    return;
++  }
++  VLOG(1) << "psyops stdin: dropping unknown type: " << *type;
++}
++
++void ReadLoop() {
++  std::string line;
++  while (std::getline(std::cin, line)) {
++    std::optional<base::Value> parsed = base::JSONReader::Read(line);
++    if (!parsed || !parsed->is_dict()) {
++      VLOG(1) << "psyops stdin: dropping non-object line";
++      continue;
++    }
++    content::GetUIThreadTaskRunner({})->PostTask(
++        FROM_HERE,
++        base::BindOnce(&HandleParsedRequest,
++                       std::move(*parsed).TakeDict()));
++  }
++}
++
++}  // namespace
++
++void StartStdinIo() {
++  static base::NoDestructor<base::Thread> thread("PsyopsStdinIo");
++  if (thread->IsRunning()) {
++    return;
++  }
++  base::Thread::Options options;
++  options.message_pump_type = base::MessagePumpType::DEFAULT;
++  thread->StartWithOptions(std::move(options));
++  thread->task_runner()->PostTask(FROM_HERE, base::BindOnce(&ReadLoop));
++}
++
++}  // namespace psyops
+--- a/components/psyops/BUILD.gn
++++ b/components/psyops/BUILD.gn
+@@ -20,3 +20,15 @@ source_set("hand_pointer") {
+   ]
+   deps = [ "//base" ]
+ }
++
++source_set("stdin_io") {
++  sources = [
++    "stdin_io.cc",
++    "stdin_io.h",
++  ]
++  deps = [
++    "//base",
++    "//chrome/browser/ui",
++    "//content/public/browser",
++  ]
++}
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -77,6 +77,7 @@
+ #include "components/memory_system/parameters.h"
+ #include "components/metrics/persistent_histograms.h"
+ #include "components/psyops/psyops_switches.h"
++#include "components/psyops/stdin_io.h"
+ #include "components/sampling_profiler/thread_profiler.h"
+ #include "components/startup_metric_utils/common/startup_metric_utils.h"
+ #include "components/variations/service/variations_network_clock.h"
+@@ -1119,6 +1119,9 @@
+       base::CommandLine::ForCurrentProcess()->AppendArg(
+           "https://console.x.ai");
+     }
++
++    // Start the JSON-Lines stdin/stdout dev API.
++    psyops::StartStdinIo();
+   }
+
+   // Only allow disabling web security via the command-line flag if the user has
