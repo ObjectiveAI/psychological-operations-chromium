@@ -111,3 +111,4 @@ extra/ungoogled-chromium/add-flag-for-disabling-jit.patch
 
 extra/psyops/launch-args.patch
 extra/psyops/no-session-restore.patch
+extra/psyops/no-default-prompts.patch

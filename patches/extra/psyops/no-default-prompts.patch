@@ -1,0 +1,59 @@
+# Suppress the two unsolicited "set Chromium as default" prompts.
+#
+# 1. "Set Chromium as your default browser" — replaces the body of
+#    ShowDefaultBrowserPrompt() with a no-op. Kills all three downstream
+#    surfaces (bubble, infobar, modal) since they're all reached via
+#    GetDefaultBrowserState which we no longer call.
+#
+# 2. "Set Chrome as your default PDF viewer" — replaces the body of
+#    PdfInfoBarController::MaybeShowInfoBarAtStartup() with a no-op.
+#    Single public entry point for the PDF infobar; private
+#    MaybeShowInfoBar() is only reached from here.
+#
+# The user-initiated path to set default browser via
+# chrome://settings/defaultBrowser remains functional. We only suppress
+# the unsolicited prompts the browser raises on its own.
+
+--- a/chrome/browser/ui/startup/default_browser_prompt/default_browser_prompt.cc
++++ b/chrome/browser/ui/startup/default_browser_prompt/default_browser_prompt.cc
+@@ -123,16 +123,5 @@ void OnCheckIsDefaultBrowserFinished(
+
+ void ShowDefaultBrowserPrompt(Profile* profile,
+                               base::OnceCallback<void(bool)> done_callback) {
+-  // Do not check if Chrome is the default browser if there is a policy in
+-  // control of this setting.
+-  if (g_browser_process->local_state()->IsManagedPreference(
+-          prefs::kDefaultBrowserSettingEnabled)) {
+-    // Handling of the browser.default_browser_setting_enabled policy setting is
+-    // taken care of in BrowserProcessImpl.
+-    return;
+-  }
+-
+-  default_browser::DefaultBrowserManager::From(g_browser_process)
+-      ->GetDefaultBrowserState(base::BindOnce(
+-          &OnCheckIsDefaultBrowserFinished, profile, std::move(done_callback)));
++  // psyops override: never prompt to set Chromium as default browser.
+ }
+--- a/chrome/browser/ui/pdf/infobar/pdf_infobar_controller.cc
++++ b/chrome/browser/ui/pdf/infobar/pdf_infobar_controller.cc
+@@ -85,18 +85,8 @@ PdfInfoBarController::~PdfInfoBarController() = default;
+ void PdfInfoBarController::MaybeShowInfoBarAtStartup(
+     base::WeakPtr<BrowserWindowInterface> startup_browser,
+     bool higher_priority_infobar_shown) {
+-  higher_priority_infobar_shown_ = higher_priority_infobar_shown;
+-  if (!startup_browser) {
+-    return;
+-  }
+-  if (!IsAppropriateForInfoBar(startup_browser.get())) {
+-    return;
+-  }
+-  PdfInfoBarController* controller =
+-      PdfInfoBarController::From(startup_browser.get());
+-  if (controller) {
+-    controller->MaybeShowInfoBar();
+-  }
++  // psyops override: never show the "Set Chrome as default PDF viewer"
++  // infobar.
+ }
+
+ void PdfInfoBarController::OnBrowserClosed(BrowserWindowInterface* browser) {
