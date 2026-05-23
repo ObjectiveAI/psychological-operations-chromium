@@ -98,14 +98,18 @@
  #include "components/sampling_profiler/thread_profiler.h"
  #include "components/startup_metric_utils/common/startup_metric_utils.h"
  #include "components/variations/service/variations_network_clock.h"
-@@ -1057,6 +1058,23 @@ std::optional<int> ChromeMainDelegate::BasicStartupComplete() {
+@@ -1057,6 +1058,43 @@ std::optional<int> ChromeMainDelegate::BasicStartupComplete() {
    const base::CommandLine& command_line =
        *base::CommandLine::ForCurrentProcess();
 
-+  // psyops launch arg validation: the browser process must be invoked with
-+  // --config-base-dir AND at least one of --psyop / --x-app. Subprocesses
-+  // inherit the command line, so this is a one-shot gate at the
-+  // browser-process startup boundary.
++  // psyops launch arg validation and per-session state redirection:
++  // the browser process must be invoked with --config-base-dir AND at
++  // least one of --psyop / --x-app. Subprocesses inherit the command
++  // line, so this is a one-shot gate at the browser-process startup
++  // boundary. After validating, --user-data-dir is forced to a
++  // per-session subdirectory so every byte of state (cookies, cache,
++  // history, extensions, ...) nests under one path we control. If
++  // both --x-app and --psyop are set, --x-app wins.
 +  if (!command_line.HasSwitch(switches::kProcessType)) {
 +    if (!command_line.HasSwitch(switches::kConfigBaseDir)) {
 +      LOG(ERROR) << "--" << switches::kConfigBaseDir << " is required";
@@ -117,6 +121,22 @@
 +                 << " or --" << switches::kXApp << " must be specified";
 +      return 1;
 +    }
++
++    base::FilePath target_dir =
++        command_line.GetSwitchValuePath(switches::kConfigBaseDir)
++            .Append(FILE_PATH_LITERAL("plugins"))
++            .Append(FILE_PATH_LITERAL("psychological-operations"))
++            .Append(FILE_PATH_LITERAL("chromium"));
++    if (command_line.HasSwitch(switches::kXApp)) {
++      target_dir = target_dir.Append(FILE_PATH_LITERAL("x-app"));
++    } else {
++      target_dir =
++          target_dir.Append(FILE_PATH_LITERAL("psyops"))
++              .AppendASCII(
++                  command_line.GetSwitchValueASCII(switches::kPsyop));
++    }
++    base::CommandLine::ForCurrentProcess()->AppendSwitchPath(
++        switches::kUserDataDir, target_dir);
 +  }
 +
    // Only allow disabling web security via the command-line flag if the user has
