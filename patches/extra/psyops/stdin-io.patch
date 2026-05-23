@@ -8,6 +8,8 @@
 # Initial dispatch table:
 #   {"type":"html"} -> {"type":"html","html":"..."} or
 #                     {"type":"html","error":"..."}
+#   {"type":"url"}  -> {"type":"url","url":"..."}   or
+#                     {"type":"url","error":"..."}
 #
 # The reader thread starts from ChromeMainDelegate::BasicStartupComplete
 # inside the existing browser-process guard (added by launch-args.patch).
@@ -15,7 +17,7 @@
 
 --- /dev/null
 +++ b/components/psyops/stdin_io.h
-@@ -0,0 +1,20 @@
+@@ -0,0 +1,22 @@
 +// Copyright 2026 The ObjectiveAI Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -32,6 +34,8 @@
 +// Currently supported request types:
 +//   {"type":"html"} -> {"type":"html","html":"..."}
 +//                  or {"type":"html","error":"..."}
++//   {"type":"url"}  -> {"type":"url","url":"..."}
++//                  or {"type":"url","error":"..."}
 +void StartStdinIo();
 +
 +}  // namespace psyops
@@ -39,7 +43,7 @@
 +#endif  // COMPONENTS_PSYOPS_STDIN_IO_H_
 --- /dev/null
 +++ b/components/psyops/stdin_io.cc
-@@ -0,0 +1,129 @@
+@@ -0,0 +1,157 @@
 +// Copyright 2026 The ObjectiveAI Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -67,6 +71,7 @@
 +#include "content/public/browser/browser_thread.h"
 +#include "content/public/browser/render_frame_host.h"
 +#include "content/public/browser/web_contents.h"
++#include "url/gurl.h"
 +
 +namespace psyops {
 +
@@ -128,6 +133,27 @@
 +      base::BindOnce(&OnHtmlResult), kIsolatedWorldId);
 +}
 +
++void HandleUrlRequest() {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  base::Value::Dict response;
++  response.Set("type", "url");
++  Browser* browser = chrome::FindBrowserWithActiveWindow();
++  if (!browser) {
++    response.Set("error", "no active browser");
++    WriteResponse(std::move(response));
++    return;
++  }
++  content::WebContents* wc =
++      browser->tab_strip_model()->GetActiveWebContents();
++  if (!wc) {
++    response.Set("error", "no active web contents");
++    WriteResponse(std::move(response));
++    return;
++  }
++  response.Set("url", wc->GetVisibleURL().spec());
++  WriteResponse(std::move(response));
++}
++
 +void HandleParsedRequest(base::Value::Dict request) {
 +  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 +  const std::string* type = request.FindString("type");
@@ -137,6 +163,10 @@
 +  }
 +  if (*type == "html") {
 +    HandleHtmlRequest();
++    return;
++  }
++  if (*type == "url") {
++    HandleUrlRequest();
 +    return;
 +  }
 +  VLOG(1) << "psyops stdin: dropping unknown type: " << *type;
