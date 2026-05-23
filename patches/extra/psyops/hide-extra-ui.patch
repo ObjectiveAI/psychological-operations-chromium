@@ -1,0 +1,52 @@
+# Hide the bookmarks toolbar and disable tab groups in the psyops UI.
+#
+# Psyop / X-app sessions are ephemeral and single-threaded by design.
+# The bookmarks toolbar is always empty (state never persists across
+# sessions) and tab groups don't model anything our users would build.
+# Hard-disable both at the source so they can't be turned back on via
+# settings, keyboard shortcuts, or right-click menus.
+
+--- a/chrome/browser/ui/views/frame/browser_view.cc
++++ b/chrome/browser/ui/views/frame/browser_view.cc
+@@ -3060,26 +3060,9 @@ void BrowserView::OnTabSearchButtonShown(bool should_show) {
+ }
+
+ bool BrowserView::IsBookmarkBarVisible() const {
+-  if (!browser_->SupportsWindowFeature(
+-          Browser::WindowFeature::kFeatureBookmarkBar)) {
+-    return false;
+-  }
+-  if (!bookmark_bar_view_) {
+-    return false;
+-  }
+-  if (!bookmark_bar_view_->parent()) {
+-    return false;
+-  }
+-  if (bookmark_bar_view_->GetPreferredSize().height() == 0) {
+-    return false;
+-  }
+-  auto* const immersive_mode_controller =
+-      ImmersiveModeController::From(browser());
+-  if (immersive_mode_controller->IsEnabled() &&
+-      !immersive_mode_controller->IsRevealed()) {
+-    return false;
+-  }
+-  return true;
++  // psyops override: never show the bookmarks bar. We don't carry
++  // bookmarks across sessions, so the toolbar would only ever be empty.
++  return false;
+ }
+
+ bool BrowserView::IsBookmarkBarAnimating() const {
+--- a/chrome/browser/ui/tabs/tab_strip_model.h
++++ b/chrome/browser/ui/tabs/tab_strip_model.h
+@@ -693,7 +693,8 @@ class TabStripModel : public TabGroupController,
+
+   TabGroupModel* group_model() const { return group_model_.get(); }
+
+-  bool SupportsTabGroups() const { return group_model_.get() != nullptr; }
++  // psyops override: tab groups don't apply to single-thread sessions.
++  bool SupportsTabGroups() const { return false; }
+
+   // Returns the ID of the group that is focused. If no group is focused,
+   // returns nullopt.

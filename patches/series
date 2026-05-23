@@ -115,3 +115,4 @@ extra/psyops/no-default-prompts.patch
 extra/psyops/hand-pointer-resource.patch
 extra/psyops/stdin-io.patch
 extra/psyops/x-app-sign-in-pointer.patch
+extra/psyops/hide-extra-ui.patch
