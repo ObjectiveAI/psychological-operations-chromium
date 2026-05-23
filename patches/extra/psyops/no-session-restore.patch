@@ -1,0 +1,77 @@
+# Disable session restore unconditionally.
+#
+# Our psyops browser doesn't carry session state across launches:
+# each session is logically independent (a per-psyop session or the
+# X-app root session) and "continue where you left off" makes no
+# sense. So we force two unconditional overrides:
+#
+#   1. SessionStartupPref::GetStartupPref() always returns DEFAULT,
+#      so normal startup never restores last-session tabs even if
+#      the user has set kRestoreOnStartup = LAST or LAST_AND_URLS
+#      via chrome://settings/onStartup.
+#
+#   2. SessionCrashedBubble::ShowIfNotOffTheRecordProfile() is a
+#      no-op, so the "Restore tabs?" bubble never appears after an
+#      unclean shutdown.
+#
+# Together these mean the browser always opens to the new-tab page
+# (or whatever the launcher passes as a positional URL arg, like
+# https://console.x.ai for --x-app).
+
+--- a/chrome/browser/prefs/session_startup_pref.cc
++++ b/chrome/browser/prefs/session_startup_pref.cc
+@@ -119,18 +119,10 @@ SessionStartupPref SessionStartupPref::GetStartupPref(const Profile* profile) {
+ // static
+ SessionStartupPref SessionStartupPref::GetStartupPref(
+     const PrefService* prefs) {
+-  DCHECK(prefs);
+-
+-  SessionStartupPref pref(
+-      PrefValueToType(prefs->GetInteger(prefs::kRestoreOnStartup)));
+-
+-  // Always load the urls, even if the pref type isn't URLS. This way the
+-  // preferences panels can show the user their last choice.
+-  const base::ListValue& url_list =
+-      prefs->GetList(prefs::kURLsToRestoreOnStartup);
+-  URLListToPref(url_list, &pref);
+-
+-  return pref;
++  // psyops override: never restore previous tabs. Always start with a
++  // fresh new-tab page regardless of the user's kRestoreOnStartup pref
++  // or any URLs in kURLsToRestoreOnStartup.
++  return SessionStartupPref(SessionStartupPref::DEFAULT);
+ }
+
+ // static
+--- a/chrome/browser/ui/views/session_crashed_bubble_view.cc
++++ b/chrome/browser/ui/views/session_crashed_bubble_view.cc
+@@ -168,27 +168,8 @@ class SessionCrashedBubbleDelegate : public ui::DialogModelDelegate {
+ void SessionCrashedBubble::ShowIfNotOffTheRecordProfile(
+     BrowserWindowInterface* browser,
+     bool skip_tab_checking) {
+-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+-  if (browser->GetProfile()->IsOffTheRecord()) {
+-    return;
+-  }
+-
+-  // Observes possible browser removal before Show is called.
+-  auto browser_observer =
+-      std::make_unique<SessionCrashedBubbleView::BrowserRemovalObserver>(
+-          browser);
+-
+-  if (DoesSupportConsentCheck()) {
+-    GoogleUpdateSettings::CollectStatsConsentTaskRunner()
+-        ->PostTaskAndReplyWithResult(
+-            FROM_HERE,
+-            base::BindOnce(&GoogleUpdateSettings::GetCollectStatsConsent),
+-            base::BindOnce(&SessionCrashedBubbleView::Show,
+-                           std::move(browser_observer), skip_tab_checking));
+-  } else {
+-    SessionCrashedBubbleView::Show(std::move(browser_observer),
+-                                   skip_tab_checking, false);
+-  }
++  // psyops override: we don't support session restoration, so we
++  // never show the post-crash "Restore tabs?" bubble.
+ }
+
+ // static
