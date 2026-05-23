@@ -1,0 +1,220 @@
+# Point the HandPointer overlay at the "Sign in" link in --x-app mode.
+#
+# Adds components/psyops/x_app_pointer.{h,cc}. When chromium is launched
+# with --x-app, on every committed primary-main-frame navigation in any
+# browser tab, we inject:
+#   1. psyops::HandPointerJs() (the baked-in library, attaches to
+#      globalThis.psyops.HandPointer in our isolated world).
+#   2. A small bootstrap that hides any prior pointer, finds
+#      a[href*="accounts.x.ai/sign-in"], and creates a 👉 pointer
+#      with helper text on it.
+#
+# Bootstrap is a no-op on pages without the selector (e.g.
+# accounts.x.ai's actual login form), so navigating away cleans up
+# the pointer automatically.
+
+--- /dev/null
++++ b/components/psyops/x_app_pointer.h
+@@ -0,0 +1,17 @@
++// Copyright 2026 The ObjectiveAI Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef COMPONENTS_PSYOPS_X_APP_POINTER_H_
++#define COMPONENTS_PSYOPS_X_APP_POINTER_H_
++
++namespace psyops {
++
++// Starts the x-app sign-in pointer feature: on each navigation in any
++// browser tab, injects HandPointer.js + a bootstrap that finds the
++// "Sign in" link and points at it. UI-thread only; idempotent.
++void StartXAppSignInPointer();
++
++}  // namespace psyops
++
++#endif  // COMPONENTS_PSYOPS_X_APP_POINTER_H_
+--- /dev/null
++++ b/components/psyops/x_app_pointer.cc
+@@ -0,0 +1,138 @@
++// Copyright 2026 The ObjectiveAI Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "components/psyops/x_app_pointer.h"
++
++#include <memory>
++#include <string>
++
++#include "base/check.h"
++#include "base/containers/flat_map.h"
++#include "base/functional/bind.h"
++#include "base/functional/callback_helpers.h"
++#include "base/no_destructor.h"
++#include "base/strings/utf_string_conversions.h"
++#include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/browser_list.h"
++#include "chrome/browser/ui/browser_list_observer.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
++#include "components/psyops/hand_pointer.h"
++#include "content/public/browser/browser_thread.h"
++#include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_contents_observer.h"
++
++namespace psyops {
++
++namespace {
++
++// Shared with stdin_io.cc — both features live in the same isolated world
++// so they see the same globalThis.psyops namespace.
++constexpr int kIsolatedWorldId = 1066;
++
++constexpr char16_t kSignInBootstrapJs[] = uR"JS(
++(() => {
++  if (!globalThis.psyops || !globalThis.psyops.HandPointer) return;
++  if (globalThis.psyops._xAppPointer) {
++    globalThis.psyops._xAppPointer.hide();
++    globalThis.psyops._xAppPointer = null;
++  }
++  const link = document.querySelector('a[href*="accounts.x.ai/sign-in"]');
++  if (!link) return;
++  globalThis.psyops._xAppPointer =
++      globalThis.psyops.HandPointer.create({
++        target: link,
++        direction: 'left',
++        text: 'Sign in to your X developer account',
++      });
++  globalThis.psyops._xAppPointer.show();
++})();
++)JS";
++
++class XAppPointerObserver : public content::WebContentsObserver {
++ public:
++  explicit XAppPointerObserver(content::WebContents* wc)
++      : content::WebContentsObserver(wc) {}
++
++  void DidFinishNavigation(content::NavigationHandle* nav) override {
++    if (!nav->IsInPrimaryMainFrame() || !nav->HasCommitted()) {
++      return;
++    }
++    content::RenderFrameHost* rfh =
++        web_contents()->GetPrimaryMainFrame();
++    if (!rfh) {
++      return;
++    }
++    rfh->ExecuteJavaScriptInIsolatedWorld(
++        base::UTF8ToUTF16(HandPointerJs()),
++        base::DoNothing(), kIsolatedWorldId);
++    rfh->ExecuteJavaScriptInIsolatedWorld(
++        std::u16string(kSignInBootstrapJs),
++        base::DoNothing(), kIsolatedWorldId);
++  }
++};
++
++class XAppPointerManager : public BrowserListObserver,
++                           public TabStripModelObserver {
++ public:
++  XAppPointerManager() = default;
++  ~XAppPointerManager() override = default;
++
++  void Attach(content::WebContents* wc) {
++    if (!wc || observers_.contains(wc)) {
++      return;
++    }
++    observers_[wc] = std::make_unique<XAppPointerObserver>(wc);
++  }
++
++  void Detach(content::WebContents* wc) {
++    observers_.erase(wc);
++  }
++
++  // BrowserListObserver:
++  void OnBrowserAdded(Browser* browser) override {
++    browser->tab_strip_model()->AddObserver(this);
++    for (int i = 0; i < browser->tab_strip_model()->count(); ++i) {
++      Attach(browser->tab_strip_model()->GetWebContentsAt(i));
++    }
++  }
++
++  // TabStripModelObserver:
++  void OnTabStripModelChanged(
++      TabStripModel* tab_strip_model,
++      const TabStripModelChange& change,
++      const TabStripSelectionChange& selection) override {
++    if (change.type() == TabStripModelChange::kInserted) {
++      for (const auto& tab_info : change.GetInsert()->contents) {
++        if (auto* wc = tab_info.contents.get()) {
++          Attach(wc);
++        }
++      }
++    } else if (change.type() == TabStripModelChange::kRemoved) {
++      for (const auto& tab_info : change.GetRemove()->contents) {
++        if (auto* wc = tab_info.contents.get()) {
++          Detach(wc);
++        }
++      }
++    }
++  }
++
++ private:
++  base::flat_map<content::WebContents*,
++                 std::unique_ptr<XAppPointerObserver>> observers_;
++};
++
++}  // namespace
++
++void StartXAppSignInPointer() {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  static base::NoDestructor<XAppPointerManager> manager;
++  BrowserList::AddObserver(&*manager);
++  for (Browser* browser : *BrowserList::GetInstance()) {
++    manager->OnBrowserAdded(browser);
++  }
++}
++
++}  // namespace psyops
+--- a/components/psyops/BUILD.gn
++++ b/components/psyops/BUILD.gn
+@@ -32,3 +32,16 @@ source_set("stdin_io") {
+     "//content/public/browser",
+   ]
+ }
++
++source_set("x_app_pointer") {
++  sources = [
++    "x_app_pointer.cc",
++    "x_app_pointer.h",
++  ]
++  deps = [
++    ":hand_pointer",
++    "//base",
++    "//chrome/browser/ui",
++    "//content/public/browser",
++  ]
++}
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -78,6 +78,7 @@
+ #include "components/metrics/persistent_histograms.h"
+ #include "components/psyops/psyops_switches.h"
+ #include "components/psyops/stdin_io.h"
++#include "components/psyops/x_app_pointer.h"
+ #include "components/sampling_profiler/thread_profiler.h"
+ #include "components/startup_metric_utils/common/startup_metric_utils.h"
+ #include "components/variations/service/variations_network_clock.h"
+@@ -1117,8 +1117,13 @@
+     if (command_line.HasSwitch(switches::kXApp) &&
+         command_line.GetArgs().empty()) {
+       base::CommandLine::ForCurrentProcess()->AppendArg(
+           "https://console.x.ai");
+     }
++
++    if (command_line.HasSwitch(switches::kXApp)) {
++      content::GetUIThreadTaskRunner({})->PostTask(
++          FROM_HERE, base::BindOnce(&psyops::StartXAppSignInPointer));
++    }
+
+     // Start the JSON-Lines stdin/stdout dev API.
+     psyops::StartStdinIo();
