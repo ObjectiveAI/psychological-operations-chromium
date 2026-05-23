@@ -38,14 +38,24 @@ while [ $# -gt 0 ]; do
 done
 
 # ── Upstream tracking ──────────────────────────────────────────────────
-# Tags of OUR per-platform packaging forks (each forked from
-# ungoogled-software/ungoogled-chromium-{windows,macos,portablelinux}
-# with their `ungoogled-chromium` submodule redirected at THIS repo).
-# Their CI builds Chromium with our psyops patches applied and publishes
-# binaries to releases on the matching fork. Bump when refreshing.
-PSYOPS_WIN_TAG="148.0.7778.178-1"
-PSYOPS_MAC_TAG="148.0.7778.178-1"
-PSYOPS_LINUX_TAG="148.0.7778.178-1"
+# Tags + repos to download chromium binaries from.
+# TODO: once our ObjectiveAI/psychological-operations-chromium-{windows,
+# macos,portablelinux} forks have their CI runs published (Actions need
+# to be enabled per fork), switch USE_PSYOPS_FORKS to 1 to ship binaries
+# that actually have our patches compiled in. Until then, we pull
+# upstream's release (UNPATCHED — patches in patches/ have no effect).
+USE_PSYOPS_FORKS=0
+if [ "$USE_PSYOPS_FORKS" = 1 ]; then
+  WIN_TAG="148.0.7778.178-1"
+  MAC_TAG="148.0.7778.178-1"
+  LINUX_TAG="148.0.7778.178-1"
+  REPO_PREFIX="ObjectiveAI/psychological-operations-chromium"
+else
+  WIN_TAG="148.0.7778.167-1.1"
+  MAC_TAG="148.0.7778.167-1.1"
+  LINUX_TAG="148.0.7778.178-1"
+  REPO_PREFIX="ungoogled-software/ungoogled-chromium"
+fi
 
 # ── Host detection ─────────────────────────────────────────────────────
 if [ -z "$TARGET" ]; then
@@ -72,26 +82,26 @@ fi
 #   windows:       ungoogled-chromium_<tag>_windows_<arch>.zip     (underscore sep, underscore-arch)
 case "$TARGET" in
   linux-x86_64)
-    UPSTREAM_REPO="ObjectiveAI/psychological-operations-chromium-portablelinux"
-    UPSTREAM_TAG="$PSYOPS_LINUX_TAG"
+    UPSTREAM_REPO="${REPO_PREFIX}-portablelinux"
+    UPSTREAM_TAG="$LINUX_TAG"
     UPSTREAM_ASSET="ungoogled-chromium-${UPSTREAM_TAG}-x86_64_linux.tar.xz"
     EXTRACT_KIND="tarxz"
     ;;
   macos-x86_64)
-    UPSTREAM_REPO="ObjectiveAI/psychological-operations-chromium-macos"
-    UPSTREAM_TAG="$PSYOPS_MAC_TAG"
+    UPSTREAM_REPO="${REPO_PREFIX}-macos"
+    UPSTREAM_TAG="$MAC_TAG"
     UPSTREAM_ASSET="ungoogled-chromium_${UPSTREAM_TAG}_x86_64-macos.dmg"
     EXTRACT_KIND="dmg"
     ;;
   macos-aarch64)
-    UPSTREAM_REPO="ObjectiveAI/psychological-operations-chromium-macos"
-    UPSTREAM_TAG="$PSYOPS_MAC_TAG"
+    UPSTREAM_REPO="${REPO_PREFIX}-macos"
+    UPSTREAM_TAG="$MAC_TAG"
     UPSTREAM_ASSET="ungoogled-chromium_${UPSTREAM_TAG}_arm64-macos.dmg"
     EXTRACT_KIND="dmg"
     ;;
   windows-x86_64)
-    UPSTREAM_REPO="ObjectiveAI/psychological-operations-chromium-windows"
-    UPSTREAM_TAG="$PSYOPS_WIN_TAG"
+    UPSTREAM_REPO="${REPO_PREFIX}-windows"
+    UPSTREAM_TAG="$WIN_TAG"
     UPSTREAM_ASSET="ungoogled-chromium_${UPSTREAM_TAG}_windows_x64.zip"
     EXTRACT_KIND="zip"
     ;;
@@ -114,65 +124,80 @@ RAW_DIR="$BUILD_DIR/raw"
 EXTRACTED_DIR="$BUILD_DIR/extracted"
 OUT_NAME="psychological-operations-chromium-${TARGET}.zip"
 OUT_PATH="$BUILD_DIR/$OUT_NAME"
+# Cache-key fingerprint. Bump-on-any-input semantics: written at the end
+# of a successful build, checked at the start to short-circuit redundant
+# downloads + extracts when nothing relevant has changed.
+FINGERPRINT_FILE="$BUILD_DIR/.fingerprint"
+CURRENT_FP="$UPSTREAM_REPO|$UPSTREAM_TAG|$UPSTREAM_ASSET"
 
 mkdir -p "$RAW_DIR"
-rm -rf "$EXTRACTED_DIR"
-mkdir -p "$EXTRACTED_DIR"
 
-# ── Download upstream ──────────────────────────────────────────────────
-echo "==> Downloading $UPSTREAM_REPO @ $UPSTREAM_TAG :: $UPSTREAM_ASSET"
-if [ -f "$RAW_DIR/$UPSTREAM_ASSET" ]; then
-  echo "    (cached: $RAW_DIR/$UPSTREAM_ASSET)"
+# ── Cache check ────────────────────────────────────────────────────────
+CACHED_FP=""
+[ -f "$FINGERPRINT_FILE" ] && CACHED_FP=$(cat "$FINGERPRINT_FILE")
+if [ "$CACHED_FP" = "$CURRENT_FP" ] \
+   && [ -d "$EXTRACTED_DIR" ] \
+   && [ -n "$(ls -A "$EXTRACTED_DIR" 2>/dev/null)" ] \
+   && [ -f "$OUT_PATH" ]; then
+  echo "==> Up to date for $UPSTREAM_TAG (cached at $BUILD_DIR)"
 else
-  gh release download "$UPSTREAM_TAG" \
-    --repo "$UPSTREAM_REPO" \
-    --pattern "$UPSTREAM_ASSET" \
-    --dir "$RAW_DIR"
-fi
-[ -f "$RAW_DIR/$UPSTREAM_ASSET" ] || {
-  echo "ERROR: expected download at $RAW_DIR/$UPSTREAM_ASSET" >&2
-  exit 1
-}
+  rm -rf "$EXTRACTED_DIR"
+  mkdir -p "$EXTRACTED_DIR"
 
-# ── Extract ────────────────────────────────────────────────────────────
-echo "==> Extracting ($EXTRACT_KIND)"
-case "$EXTRACT_KIND" in
-  tarxz)
-    tar -xJf "$RAW_DIR/$UPSTREAM_ASSET" -C "$EXTRACTED_DIR"
-    ;;
-  zip)
-    if command -v unzip >/dev/null 2>&1; then
-      unzip -q "$RAW_DIR/$UPSTREAM_ASSET" -d "$EXTRACTED_DIR"
-    else
-      # Git-Bash on Windows ships python but not always unzip.
-      python -m zipfile -e "$RAW_DIR/$UPSTREAM_ASSET" "$EXTRACTED_DIR"
-    fi
-    ;;
-  dmg)
-    command -v hdiutil >/dev/null 2>&1 || {
-      echo "ERROR: .dmg extraction requires macOS hdiutil (target=$TARGET on non-macOS host)" >&2
-      exit 1
-    }
-    MNT="$BUILD_DIR/mnt"
-    mkdir -p "$MNT"
-    hdiutil attach -nobrowse -readonly -mountpoint "$MNT" "$RAW_DIR/$UPSTREAM_ASSET" >/dev/null
-    # ungoogled-chromium-macos ships a single .app at the dmg root.
-    cp -R "$MNT"/*.app "$EXTRACTED_DIR/"
-    hdiutil detach -quiet "$MNT"
-    ;;
-  *)
-    echo "ERROR: unknown EXTRACT_KIND=$EXTRACT_KIND" >&2
+  # ── Download upstream ────────────────────────────────────────────────
+  echo "==> Downloading $UPSTREAM_REPO @ $UPSTREAM_TAG :: $UPSTREAM_ASSET"
+  if [ -f "$RAW_DIR/$UPSTREAM_ASSET" ]; then
+    echo "    (cached: $RAW_DIR/$UPSTREAM_ASSET)"
+  else
+    gh release download "$UPSTREAM_TAG" \
+      --repo "$UPSTREAM_REPO" \
+      --pattern "$UPSTREAM_ASSET" \
+      --dir "$RAW_DIR"
+  fi
+  [ -f "$RAW_DIR/$UPSTREAM_ASSET" ] || {
+    echo "ERROR: expected download at $RAW_DIR/$UPSTREAM_ASSET" >&2
     exit 1
-    ;;
-esac
+  }
 
-# ── Repackage to uniform .zip ──────────────────────────────────────────
-echo "==> Packaging $OUT_PATH"
-rm -f "$OUT_PATH"
-if command -v zip >/dev/null 2>&1; then
-  ( cd "$EXTRACTED_DIR" && zip -qr "$OUT_PATH" . )
-else
-  python - "$EXTRACTED_DIR" "$OUT_PATH" <<'PY'
+  # ── Extract ──────────────────────────────────────────────────────────
+  echo "==> Extracting ($EXTRACT_KIND)"
+  case "$EXTRACT_KIND" in
+    tarxz)
+      tar -xJf "$RAW_DIR/$UPSTREAM_ASSET" -C "$EXTRACTED_DIR"
+      ;;
+    zip)
+      if command -v unzip >/dev/null 2>&1; then
+        unzip -q "$RAW_DIR/$UPSTREAM_ASSET" -d "$EXTRACTED_DIR"
+      else
+        # Git-Bash on Windows ships python but not always unzip.
+        python -m zipfile -e "$RAW_DIR/$UPSTREAM_ASSET" "$EXTRACTED_DIR"
+      fi
+      ;;
+    dmg)
+      command -v hdiutil >/dev/null 2>&1 || {
+        echo "ERROR: .dmg extraction requires macOS hdiutil (target=$TARGET on non-macOS host)" >&2
+        exit 1
+      }
+      MNT="$BUILD_DIR/mnt"
+      mkdir -p "$MNT"
+      hdiutil attach -nobrowse -readonly -mountpoint "$MNT" "$RAW_DIR/$UPSTREAM_ASSET" >/dev/null
+      # ungoogled-chromium-macos ships a single .app at the dmg root.
+      cp -R "$MNT"/*.app "$EXTRACTED_DIR/"
+      hdiutil detach -quiet "$MNT"
+      ;;
+    *)
+      echo "ERROR: unknown EXTRACT_KIND=$EXTRACT_KIND" >&2
+      exit 1
+      ;;
+  esac
+
+  # ── Repackage to uniform .zip ────────────────────────────────────────
+  echo "==> Packaging $OUT_PATH"
+  rm -f "$OUT_PATH"
+  if command -v zip >/dev/null 2>&1; then
+    ( cd "$EXTRACTED_DIR" && zip -qr "$OUT_PATH" . )
+  else
+    python - "$EXTRACTED_DIR" "$OUT_PATH" <<'PY'
 import os, sys, zipfile
 src, dst = sys.argv[1], sys.argv[2]
 with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as z:
@@ -181,8 +206,13 @@ with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as z:
             p = os.path.join(root, f)
             z.write(p, os.path.relpath(p, src))
 PY
+  fi
+  [ -f "$OUT_PATH" ] || { echo "ERROR: package missing: $OUT_PATH" >&2; exit 1; }
+
+  # Write the fingerprint last — only after every step succeeded. Next
+  # invocation with the same inputs will skip the whole pipeline above.
+  echo "$CURRENT_FP" > "$FINGERPRINT_FILE"
 fi
-[ -f "$OUT_PATH" ] || { echo "ERROR: package missing: $OUT_PATH" >&2; exit 1; }
 
 # stat -c is GNU, stat -f is BSD; one of them works on every host we target.
 OUT_SIZE=$(stat -c '%s' "$OUT_PATH" 2>/dev/null || stat -f '%z' "$OUT_PATH")

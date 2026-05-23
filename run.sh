@@ -70,12 +70,13 @@ case "$(uname -m)" in
 esac
 TARGET="${host_os}-${host_arch}"
 
-# ── Ensure extracted Chromium tree exists ──────────────────────────────
+# ── Ensure extracted Chromium tree is up to date ───────────────────────
+# build.sh is idempotent: it short-circuits when its .fingerprint
+# matches the current upstream tag/asset and the extracted tree + .zip
+# exist. Cache-hit returns in ~200ms; cache-miss runs the full
+# download + extract + repackage (minutes).
 EXTRACTED_DIR="$REPO_ROOT/.build/$TARGET/extracted"
-if [ ! -d "$EXTRACTED_DIR" ] || [ -z "$(ls -A "$EXTRACTED_DIR" 2>/dev/null)" ]; then
-  echo "==> No extracted Chromium at $EXTRACTED_DIR — running build.sh"
-  bash "$REPO_ROOT/build.sh" --target "$TARGET"
-fi
+bash "$REPO_ROOT/build.sh" --target "$TARGET"
 
 # ── Locate chrome binary ───────────────────────────────────────────────
 case "$host_os" in
