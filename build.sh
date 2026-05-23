@@ -38,13 +38,14 @@ while [ $# -gt 0 ]; do
 done
 
 # ── Upstream tracking ──────────────────────────────────────────────────
-# Tags of the upstream ungoogled-chromium packaging repos we re-host.
-# Independent because the three repos release on their own cadences
-# (windows/macos currently track together at -1.1; portablelinux at -1).
-# Bump these when refreshing.
-UNGOOGLED_WIN_TAG="148.0.7778.167-1.1"
-UNGOOGLED_MAC_TAG="148.0.7778.167-1.1"
-UNGOOGLED_LINUX_TAG="148.0.7778.178-1"
+# Tags of OUR per-platform packaging forks (each forked from
+# ungoogled-software/ungoogled-chromium-{windows,macos,portablelinux}
+# with their `ungoogled-chromium` submodule redirected at THIS repo).
+# Their CI builds Chromium with our psyops patches applied and publishes
+# binaries to releases on the matching fork. Bump when refreshing.
+PSYOPS_WIN_TAG="148.0.7778.178-1"
+PSYOPS_MAC_TAG="148.0.7778.178-1"
+PSYOPS_LINUX_TAG="148.0.7778.178-1"
 
 # ── Host detection ─────────────────────────────────────────────────────
 if [ -z "$TARGET" ]; then
@@ -63,32 +64,34 @@ if [ -z "$TARGET" ]; then
 fi
 
 # ── Resolve platform → upstream repo + asset name ──────────────────────
-# Asset naming conventions differ per repo (intentional, mirrors upstream):
+# Asset naming conventions inherited from the upstream packaging repos
+# (our forks didn't touch the build scripts, so they produce identical
+# names):
 #   portablelinux: ungoogled-chromium-<tag>-<arch>_linux.tar.xz   (dash sep)
 #   macos:         ungoogled-chromium_<tag>_<arch>-macos.dmg       (underscore sep, dash-arch)
 #   windows:       ungoogled-chromium_<tag>_windows_<arch>.zip     (underscore sep, underscore-arch)
 case "$TARGET" in
   linux-x86_64)
-    UPSTREAM_REPO="ungoogled-software/ungoogled-chromium-portablelinux"
-    UPSTREAM_TAG="$UNGOOGLED_LINUX_TAG"
+    UPSTREAM_REPO="ObjectiveAI/psychological-operations-chromium-portablelinux"
+    UPSTREAM_TAG="$PSYOPS_LINUX_TAG"
     UPSTREAM_ASSET="ungoogled-chromium-${UPSTREAM_TAG}-x86_64_linux.tar.xz"
     EXTRACT_KIND="tarxz"
     ;;
   macos-x86_64)
-    UPSTREAM_REPO="ungoogled-software/ungoogled-chromium-macos"
-    UPSTREAM_TAG="$UNGOOGLED_MAC_TAG"
+    UPSTREAM_REPO="ObjectiveAI/psychological-operations-chromium-macos"
+    UPSTREAM_TAG="$PSYOPS_MAC_TAG"
     UPSTREAM_ASSET="ungoogled-chromium_${UPSTREAM_TAG}_x86_64-macos.dmg"
     EXTRACT_KIND="dmg"
     ;;
   macos-aarch64)
-    UPSTREAM_REPO="ungoogled-software/ungoogled-chromium-macos"
-    UPSTREAM_TAG="$UNGOOGLED_MAC_TAG"
+    UPSTREAM_REPO="ObjectiveAI/psychological-operations-chromium-macos"
+    UPSTREAM_TAG="$PSYOPS_MAC_TAG"
     UPSTREAM_ASSET="ungoogled-chromium_${UPSTREAM_TAG}_arm64-macos.dmg"
     EXTRACT_KIND="dmg"
     ;;
   windows-x86_64)
-    UPSTREAM_REPO="ungoogled-software/ungoogled-chromium-windows"
-    UPSTREAM_TAG="$UNGOOGLED_WIN_TAG"
+    UPSTREAM_REPO="ObjectiveAI/psychological-operations-chromium-windows"
+    UPSTREAM_TAG="$PSYOPS_WIN_TAG"
     UPSTREAM_ASSET="ungoogled-chromium_${UPSTREAM_TAG}_windows_x64.zip"
     EXTRACT_KIND="zip"
     ;;
