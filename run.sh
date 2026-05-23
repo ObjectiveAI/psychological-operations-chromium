@@ -103,7 +103,14 @@ if [ "$host_os" = "windows" ] && command -v cygpath >/dev/null 2>&1; then
   CONFIG_BASE_DIR=$(cygpath -w "$CONFIG_BASE_DIR")
 fi
 
-ARGS=( "--config-base-dir=$CONFIG_BASE_DIR" )
+ARGS=(
+  "--config-base-dir=$CONFIG_BASE_DIR"
+  # Suppress chromium's first-run UI (welcome page, default-browser prompt)
+  # so positional URLs reliably open instead of getting hijacked by
+  # ungoogled-chromium's first-run-page.patch on a fresh profile.
+  "--no-first-run"
+  "--no-default-browser-check"
+)
 if [ "$X_APP" = 1 ]; then
   ARGS+=( "--x-app" )
 fi
@@ -111,6 +118,14 @@ if [ -n "$PSYOP" ]; then
   ARGS+=( "--psyop=$PSYOP" )
 fi
 ARGS+=( ${EXTRAS[@]+"${EXTRAS[@]}"} )
+
+# Default x-app sessions to open the X developer console when the user
+# didn't pass their own positional URL(s) in EXTRAS. Works on any
+# chromium binary — patched or not — since chromium treats trailing
+# positional args as URLs to open in the first window.
+if [ "$X_APP" = 1 ] && [ ${#EXTRAS[@]} -eq 0 ]; then
+  ARGS+=( "https://console.x.ai" )
+fi
 
 echo "==> $CHROME"
 printf '    %s\n' "${ARGS[@]}"
